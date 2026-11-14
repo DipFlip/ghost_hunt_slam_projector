@@ -16,8 +16,13 @@ game:
   ghosts: 6
   catch_seconds: 2.0
   aim_deg: 5.0            # how close to the reticle a ghost must be
+  edge_fade: 0.3          # ghosts fade out over this fraction of the picture height towards its edge
+  occlusion: false        # hide ghosts behind mapped surfaces (off: this room is open, and it made them blink)
+  hint_deg: 60.0          # an edge arrow points at ghosts outside the picture but within this angle of the reticle
   ghost_radius: 0.22      # metres
-  ghost_speed: 0.25       # metres per second the ghosts drift along the surfaces (0: they stay put)
+  ghost_speed: 0.4        # metres per second the ghosts drift along the surfaces (0: they stay put)
+  flee_deg: 12.0          # with the reticle this close a ghost runs from it,
+  flee_speed: 0.8         # at this speed in metres per second (0: it does not)
   scan_seconds: 20        # walk around first so the room is mapped
   spawn_range: [1.0, 6.0] # metres from the player when the hunt starts
   spawn_height: [0.1, 1.6] # metres above the lowest mapped level (the dome-up Airy sees nothing below itself)

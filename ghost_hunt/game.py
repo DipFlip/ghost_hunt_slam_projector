@@ -95,8 +95,9 @@ def spawn(keys, player, cfg, rng):
     return [p + 0.12 * (player - p) / np.linalg.norm(player - p) for p in picked]
 
 
-def wander_target(keys, pos, player, cfg, rng):
-    """A mapped surface point 0.5-1.5 m from the ghost, at ghost heights, or None."""
+def wander_target(keys, pos, player, cfg, rng, flee=None):
+    """A mapped surface point 0.5-1.5 m from the ghost, at ghost heights, or None. With flee
+    (the View), the one of 30 such points that is farthest from the reticle."""
     if len(keys) < 500:
         return None
     pts = unpack(keys)
@@ -105,8 +106,64 @@ def wander_target(keys, pos, player, cfg, rng):
     ok = (dist > 0.5) & (dist < 1.5) & (height > cfg["spawn_height"][0]) & (height < cfg["spawn_height"][1])
     if not ok.any():
         return None
-    p = pts[rng.choice(np.nonzero(ok)[0])]
+    if flee is None:
+        p = pts[rng.choice(np.nonzero(ok)[0])]
+    else:
+        some = pts[rng.choice(np.nonzero(ok)[0], 30)]
+        p = some[np.argmax([flee.aim_angle_deg(q) for q in some])]
     return p + 0.12 * (player - p) / np.linalg.norm(player - p)
+
+
+class Sounds:
+    """Tones made here, played through the default output (the projector, over HDMI): a note
+    that climbs while a ghost is being caught, and a chime when it is."""
+
+    STEPS = 8
+
+    def __init__(self):
+        self.step = None
+        try:
+            pygame.mixer.init(44100, -16, 2, 512)
+            self.rate, _, self.channels = pygame.mixer.get_init()
+            self.rising = [self.tone(330 * 2 ** (i / 7), 0.6, wobble=7) for i in range(self.STEPS)]
+            self.caught = self.make(np.concatenate([self.wave(f, 0.16, decay=6) for f in (660, 880, 1320)]
+                                                   + [self.wave(1760, 0.5, decay=5)]))
+            self.channel = pygame.mixer.Channel(0)
+        except pygame.error as e:
+            print(f"no sound: {e}", flush=True)
+            self.rising = None
+
+    def wave(self, freq, seconds, decay=0.0, wobble=0.0):
+        t = np.arange(int(self.rate * seconds)) / self.rate
+        w = np.sin(2 * np.pi * freq * t + (2.0 * np.sin(2 * np.pi * wobble * t) if wobble else 0.0))
+        w += 0.3 * np.sin(4 * np.pi * freq * t)
+        fade = np.minimum(1, np.minimum(t, seconds - t) / 0.02)  # no clicks at the ends
+        return w * np.exp(-decay * t) * fade
+
+    def make(self, w):
+        pcm = (w / np.abs(w).max() * 0.5 * 32767).astype(np.int16)
+        return pygame.sndarray.make_sound(np.ascontiguousarray(np.repeat(pcm[:, None], self.channels, axis=1)))
+
+    def tone(self, freq, seconds, wobble):
+        return self.make(self.wave(freq, seconds, wobble=wobble))
+
+    def catching(self, fraction):
+        """Call every frame with the catch progress of the ghost aimed at, or None."""
+        if self.rising is None:
+            return
+        step = None if fraction is None else min(int(fraction * self.STEPS), self.STEPS - 1)
+        if step != self.step:
+            if step is None:
+                self.channel.fadeout(200)
+            else:
+                self.channel.play(self.rising[step], fade_ms=30)
+            self.step = step
+
+    def catch(self):
+        if self.rising is not None:
+            self.step = None
+            self.channel.stop()
+            self.caught.play()
 
 
 def ghost_sprite():
@@ -136,6 +193,7 @@ class Game:
         self.size = self.canvas.get_size()
         self.font = pygame.font.Font(None, self.size[1] // 12)
         self.sprite = ghost_sprite()
+        self.sounds = Sounds()
         self.ros = Link()
         self.rng = np.random.default_rng()
         self.cfg, self.cfg_mtime = None, 0
@@ -157,6 +215,7 @@ class Game:
 
     def enter(self, phase):
         self.phase, self.phase_t = phase, time.monotonic()
+        self.sounds.catching(None)
         if phase == "SCAN":
             self.ghosts = []
 
@@ -164,7 +223,7 @@ class Game:
         pts = spawn(self.ros.map(), player, self.cfg["game"], self.rng)
         if not pts:
             return self.enter("SCAN")
-        self.ghosts = [{"pos": p, "target": None, "progress": 0.0, "caught": None, "aimed": False, "seen": False}
+        self.ghosts = [{"pos": p, "target": None, "fled": 0.0, "behind": 0.0, "progress": 0.0, "caught": None, "aimed": False, "seen": False}
                        for p in pts]
         self.enter("HUNT")
 
@@ -188,20 +247,34 @@ class Game:
             for gh in self.ghosts:
                 if gh["caught"] is not None:
                     continue
-                if g["ghost_speed"] > 0:  # drift from one spot on the surfaces to the next
+                # Drift from one spot on the surfaces to the next; with the reticle close, run
+                # for a spot away from it instead (re-chosen twice a second as the reticle follows).
+                fleeing = view.aim_angle_deg(gh["pos"]) < g["flee_deg"]
+                if fleeing and now - gh["fled"] > 0.5:
+                    away = wander_target(keys, gh["pos"], view.pos, g, self.rng, flee=view)
+                    gh["target"], gh["fled"] = (gh["target"] if away is None else away), now
+                speed = g["flee_speed"] if fleeing else g["ghost_speed"]
+                if speed > 0:
                     if gh["target"] is None:
                         gh["target"] = wander_target(keys, gh["pos"], view.pos, g, self.rng)
                     if gh["target"] is not None:
-                        step, to = g["ghost_speed"] * dt, gh["target"] - gh["pos"]
+                        step, to = speed * dt, gh["target"] - gh["pos"]
                         far = np.linalg.norm(to)
                         gh["pos"] = gh["target"] if far <= step else gh["pos"] + to * step / far
                         if far <= step:
                             gh["target"] = None
-                gh["seen"] = not occluded(keys, view.pos, gh["pos"])
+                # Hidden only after 0.6 s behind something: single map voxels and the ghost's own
+                # drift past edges made it blink.
+                hidden = g["occlusion"] and occluded(keys, view.pos, gh["pos"])
+                gh["behind"] = gh["behind"] + dt if hidden else 0.0
+                gh["seen"] = gh["behind"] < 0.6
                 gh["aimed"] = gh["seen"] and view.aim_angle_deg(gh["pos"]) < g["aim_deg"]
                 gh["progress"] = gh["progress"] + dt if gh["aimed"] else max(0.0, gh["progress"] - 2 * dt)
                 if gh["progress"] >= g["catch_seconds"]:
                     gh["caught"] = now
+                    self.sounds.catch()
+            aimed = [gh["progress"] for gh in self.ghosts if gh["caught"] is None and gh["aimed"]]
+            self.sounds.catching(max(aimed) / g["catch_seconds"] if aimed else None)
             if all(gh["caught"] is not None for gh in self.ghosts):
                 self.hunt_time = now - self.phase_t
                 self.enter("WIN")
@@ -237,6 +310,11 @@ class Game:
         small = pygame.surfarray.make_surface(img[6:-6, 6:-6])
         self.canvas.blit(pygame.transform.scale(small, self.size), (0, 0))
 
+    def edge_alpha(self, u, v):
+        """1 in the middle of the picture, fading to 0 at its edge (and beyond)."""
+        w, h = self.size
+        return float(np.clip(min(u, w - u, v, h - v) / (self.cfg["game"]["edge_fade"] * h), 0, 1))
+
     def draw_ghost(self, view, gh, now):
         g = self.cfg["game"]
         age = 0.0 if gh["caught"] is None else now - gh["caught"]
@@ -251,12 +329,46 @@ class Game:
         if gh["caught"] is not None:
             img.fill((120, 255, 120, int(255 * (1 - age))), special_flags=pygame.BLEND_RGBA_MULT)
         c = (int(u[0]), int(v[0]))
+        alpha = self.edge_alpha(u[0], v[0])
+        if alpha <= 0:
+            return
+        if alpha < 1:
+            img.fill((255, 255, 255, int(255 * alpha)), special_flags=pygame.BLEND_RGBA_MULT)
         self.canvas.blit(img, img.get_rect(center=c))
         if gh["caught"] is None and gh["progress"] > 0:
             r = int(size * 0.75)
             end = 2 * math.pi * gh["progress"] / g["catch_seconds"]
             pygame.draw.arc(self.canvas, (80, 255, 80), (c[0] - r, c[1] - r, 2 * r, 2 * r), math.pi / 2 - end, math.pi / 2,
                             max(3, size // 12))
+
+    def draw_hints(self, view):
+        """An arrow at the edge of the picture towards each ghost near the beam that is outside
+        the picture or fading out at its edge."""
+        w, h = self.size
+        limit = self.cfg["game"]["hint_deg"]
+        for gh in self.ghosts:
+            if gh["caught"] is not None:
+                continue
+            d = (gh["pos"] - view.pos) @ view.rot
+            d = d / np.linalg.norm(d)
+            angle = math.degrees(math.acos(np.clip(d @ view.aim, -1, 1)))
+            if angle > limit:
+                continue
+            faded = 1.0  # how far the ghost itself has faded out: the arrow takes over
+            if d[2] > 0.05:
+                faded = 1 - self.edge_alpha(view.f * d[0] / d[2] + view.cx, view.f * d[1] / d[2] + view.cy)
+                if faded <= 0:
+                    continue  # plainly in the picture
+            way = d[:2] - view.aim[:2]
+            way = way / max(np.linalg.norm(way), 1e-6)
+            margin = 0.07 * h
+            reach = min((w / 2 - margin) / max(abs(way[0]), 1e-6), (h / 2 - margin) / max(abs(way[1]), 1e-6))
+            tip = np.array([w / 2, h / 2]) + way * reach
+            near = 1 - angle / limit  # 0 at the limit, towards 1 just outside the picture
+            size, side = (0.03 + 0.04 * near) * h, np.array([-way[1], way[0]])
+            shade = int((90 + 165 * near) * faded)
+            pygame.draw.polygon(self.canvas, (shade, shade, shade),
+                                [tip, tip - way * size + side * size * 0.6, tip - way * size - side * size * 0.6])
 
     def text(self, s, y, color=(255, 255, 255)):
         img = self.font.render(s, True, color)
@@ -281,6 +393,7 @@ class Game:
                 self.text(f"{caught}/{len(self.ghosts)}   {now - self.phase_t:.0f} s", 0.08)
                 r = int(view.f * math.tan(math.radians(self.cfg["game"]["aim_deg"])))
                 pygame.draw.circle(self.canvas, (90, 90, 90), (w // 2, h // 2), r, 2)
+                self.draw_hints(view)
             elif self.phase == "WIN":
                 self.text(f"All ghosts caught in {self.hunt_time:.0f} s!", 0.5, (120, 255, 120))
         t = time.monotonic()

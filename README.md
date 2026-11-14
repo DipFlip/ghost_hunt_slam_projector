@@ -1,7 +1,9 @@
 # Ghost hunt
 
 A projector with the Airy on top is a torch: ghosts are fixed in the room and show up where the
-beam lands, drifting slowly along the surfaces. Hold the reticle on one for 2 s to catch it. Pose comes from airy_slam's live SLAM.
+beam lands, drifting along the surfaces and running from the reticle when it comes close. Hold
+the reticle on one for 2 s to catch it. Arrows at the edge of the picture point at ghosts just
+outside it, and the projector's speaker plays a climbing note during a catch and a chime after. Pose comes from airy_slam's live SLAM.
 
 ```sh
 bash ../airy_slam/scripts/start_slam.sh   # hold the rig still for the first seconds
