@@ -17,6 +17,7 @@ game:
   catch_seconds: 2.0
   aim_deg: 5.0            # how close to the reticle a ghost must be
   ghost_radius: 0.22      # metres
+  ghost_speed: 0.25       # metres per second the ghosts drift along the surfaces (0: they stay put)
   scan_seconds: 20        # walk around first so the room is mapped
   spawn_range: [1.0, 6.0] # metres from the player when the hunt starts
   spawn_height: [0.1, 1.6] # metres above the lowest mapped level (the dome-up Airy sees nothing below itself)

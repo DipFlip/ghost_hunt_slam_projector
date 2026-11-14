@@ -95,6 +95,20 @@ def spawn(keys, player, cfg, rng):
     return [p + 0.12 * (player - p) / np.linalg.norm(player - p) for p in picked]
 
 
+def wander_target(keys, pos, player, cfg, rng):
+    """A mapped surface point 0.5-1.5 m from the ghost, at ghost heights, or None."""
+    if len(keys) < 500:
+        return None
+    pts = unpack(keys)
+    height = pts[:, 2] - np.percentile(pts[:, 2], 2)
+    dist = np.linalg.norm(pts - pos, axis=1)
+    ok = (dist > 0.5) & (dist < 1.5) & (height > cfg["spawn_height"][0]) & (height < cfg["spawn_height"][1])
+    if not ok.any():
+        return None
+    p = pts[rng.choice(np.nonzero(ok)[0])]
+    return p + 0.12 * (player - p) / np.linalg.norm(player - p)
+
+
 def ghost_sprite():
     s = pygame.Surface((200, 240), pygame.SRCALPHA)
     white = (255, 255, 255, 255)
@@ -150,7 +164,8 @@ class Game:
         pts = spawn(self.ros.map(), player, self.cfg["game"], self.rng)
         if not pts:
             return self.enter("SCAN")
-        self.ghosts = [{"pos": p, "progress": 0.0, "caught": None, "aimed": False, "seen": False} for p in pts]
+        self.ghosts = [{"pos": p, "target": None, "progress": 0.0, "caught": None, "aimed": False, "seen": False}
+                       for p in pts]
         self.enter("HUNT")
 
     def command(self, cmd, player):
@@ -173,6 +188,15 @@ class Game:
             for gh in self.ghosts:
                 if gh["caught"] is not None:
                     continue
+                if g["ghost_speed"] > 0:  # drift from one spot on the surfaces to the next
+                    if gh["target"] is None:
+                        gh["target"] = wander_target(keys, gh["pos"], view.pos, g, self.rng)
+                    if gh["target"] is not None:
+                        step, to = g["ghost_speed"] * dt, gh["target"] - gh["pos"]
+                        far = np.linalg.norm(to)
+                        gh["pos"] = gh["target"] if far <= step else gh["pos"] + to * step / far
+                        if far <= step:
+                            gh["target"] = None
                 gh["seen"] = not occluded(keys, view.pos, gh["pos"])
                 gh["aimed"] = gh["seen"] and view.aim_angle_deg(gh["pos"]) < g["aim_deg"]
                 gh["progress"] = gh["progress"] + dt if gh["aimed"] else max(0.0, gh["progress"] - 2 * dt)
