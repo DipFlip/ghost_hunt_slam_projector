@@ -1,0 +1,20 @@
+# The ROS half of the game (ghost_hunt/bridge.py). The game itself runs on the host: run.sh.
+services:
+  bridge:
+    image: airy-slam/foxbridge:jazzy     # rclpy + numpy; built by airy_slam
+    network_mode: host                   # UDP to the game on localhost
+    ipc: host                            # /dev/shm, for the map file
+    restart: unless-stopped
+    working_dir: /game
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      CYCLONEDDS_URI: file:///etc/cyclonedds.xml
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    command: ["python3", "-m", "ghost_hunt.bridge"]
+    volumes:
+      - ../airy_slam/docker/cyclonedds.xml:/etc/cyclonedds.xml:ro
+      - .:/game:ro
+    logging:
+      driver: local

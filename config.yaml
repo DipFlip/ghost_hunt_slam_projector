@@ -1,0 +1,24 @@
+# Re-read while the game runs: edit and save to see the change on the projector.
+projector:
+  # Pinhole model of the projector. throw_ratio = distance / image width.
+  throw_ratio: 1.18
+  # Where the lens axis meets the image, as a fraction of the image size from its centre
+  # (+y is down). 0.5 = the axis is at the bottom edge, as on most table projectors.
+  lens_offset: [0.0, 0.5]
+  # Pose of the projector lens in the airy frame: metres, then roll/pitch/yaw in degrees.
+  # With all zero the projector looks along airy +x with airy +z up.
+  # throw_ratio and rpy_deg fitted 2026-11-14 (tools/calib_*.py); lens_offset and xyz assumed.
+  xyz: [0.0, 0.0, -0.08]
+  rpy_deg: [0.4, -0.4, -8.2]
+  # Seconds of gyro look-ahead, for the delay between drawing and light on the wall.
+  lead_s: 0.03
+game:
+  ghosts: 6
+  catch_seconds: 2.0
+  aim_deg: 5.0            # how close to the reticle a ghost must be
+  ghost_radius: 0.22      # metres
+  scan_seconds: 20        # walk around first so the room is mapped
+  spawn_range: [1.0, 6.0] # metres from the player when the hunt starts
+  spawn_height: [0.1, 1.6] # metres above the lowest mapped level (the dome-up Airy sees nothing below itself)
+  min_separation: 1.2
+  show_map: false         # draw the lidar map during the hunt too (alignment check)
